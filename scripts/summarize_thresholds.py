@@ -17,6 +17,10 @@ def main():
     parser.add_argument('run_dir', type=Path,
                         help='Directory containing one subdirectory per seed')
     parser.add_argument('--output', type=Path, default=Path('summary_mvia.csv'))
+    parser.add_argument(
+        '--fixed-threshold', type=float,
+        help='Use one threshold for every model. This can summarize legacy '
+             'logs at the config threshold 0.10 without retraining.')
     args = parser.parse_args()
 
     rows = []
@@ -29,12 +33,29 @@ def main():
 
         val_records = read_json_lines(val_path)
         candidates = []
-        for record in val_records:
-            for key, value in record.items():
-                if key.startswith('f1_t'):
-                    candidates.append((float(value), int(key[4:]), record))
-        if not candidates:
-            raise RuntimeError(f'No threshold metrics found in {val_path}')
+        if args.fixed_threshold is not None:
+            threshold_percent = int(round(args.fixed_threshold * 100))
+            threshold_key = f'f1_t{threshold_percent:02d}'
+            for record in val_records:
+                # Old logs only contain f1 at cfg.model.thresh=0.10.
+                if threshold_key in record:
+                    value = record[threshold_key]
+                elif threshold_percent == 10:
+                    value = record['f1']
+                else:
+                    raise RuntimeError(
+                        f'{threshold_key} is absent from legacy log {val_path}')
+                candidates.append((float(value), threshold_percent, record))
+        else:
+            for record in val_records:
+                for key, value in record.items():
+                    if key.startswith('f1_t'):
+                        candidates.append((float(value), int(key[4:]), record))
+            if not candidates:
+                raise RuntimeError(
+                    f'No threshold metrics found in {val_path}. For an old '
+                    'run made with model.thresh=0.10, add '
+                    '--fixed-threshold 0.10.')
 
         # Select both epoch and threshold using validation F1 only.
         val_f1, threshold_percent, val_record = max(
@@ -47,14 +68,15 @@ def main():
             raise RuntimeError(f'No test record for epoch {epoch} in {test_path}')
 
         suffix = f'{threshold_percent:02d}'
+        metric_suffix = f'_t{suffix}' if f'f1_t{suffix}' in test_record else ''
         rows.append({
             'seed': seed_dir.name,
             'best_epoch': epoch,
             'threshold': threshold_percent / 100,
             'val_f1': val_f1,
-            'test_f1': test_record[f'f1_t{suffix}'],
-            'test_precision': test_record[f'precision_t{suffix}'],
-            'test_recall': test_record[f'recall_t{suffix}'],
+            'test_f1': test_record[f'f1{metric_suffix}'],
+            'test_precision': test_record[f'precision{metric_suffix}'],
+            'test_recall': test_record[f'recall{metric_suffix}'],
             'test_auc': test_record['auc'],
             'test_accuracy_default_threshold': test_record['accuracy'],
         })

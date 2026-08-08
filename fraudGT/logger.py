@@ -150,13 +150,29 @@ class CustomLogger(Logger):
         reformat = lambda x: round(float(x), cfg.round)
         res = {
             'accuracy': reformat(accuracy_score(true, pred_int)),
-            'precision': reformat(precision_score(true, pred_int)),
-            'recall': reformat(recall_score(true, pred_int)),
-            'f1': reformat(f1_score(true, pred_int)),
+            'precision': reformat(precision_score(
+                true, pred_int, zero_division=0)),
+            'recall': reformat(recall_score(
+                true, pred_int, zero_division=0)),
+            'f1': reformat(f1_score(true, pred_int, zero_division=0)),
             'macro-f1': reformat(f1_score(true, pred_int, average='macro')),
             'micro-f1': reformat(f1_score(true, pred_int, average='micro')),
             'auc': reformat(auroc_score),
         }
+        # The custom training loop uses this logger (not graphgym/logger.py).
+        # Log several operating points so an epoch/threshold can be selected
+        # exclusively on validation data and then applied unchanged to test.
+        thresholds = getattr(getattr(cfg, 'mvia', None), 'thresholds', [])
+        for threshold in thresholds:
+            threshold = float(threshold)
+            threshold_pred = (pred_score > threshold).long()
+            suffix = f'{int(round(threshold * 100)):02d}'
+            res[f'precision_t{suffix}'] = reformat(precision_score(
+                true, threshold_pred, zero_division=0))
+            res[f'recall_t{suffix}'] = reformat(recall_score(
+                true, threshold_pred, zero_division=0))
+            res[f'f1_t{suffix}'] = reformat(f1_score(
+                true, threshold_pred, zero_division=0))
         if cfg.metric_best == 'accuracy-SBM':
             res['accuracy-SBM'] = reformat(accuracy_SBM(true, pred_int))
         return res
