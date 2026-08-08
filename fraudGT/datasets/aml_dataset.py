@@ -146,14 +146,20 @@ class AMLDataset(TemporalDataset):
         assert self.name.split('-')[0] in self.dataset_sizes
         assert self.name.split('-')[1] in self.dataset_rates
         super().__init__(root, transform, pre_transform)
-        self.data_dict = torch.load(self.processed_paths[0])
+        # PyTorch 2.6 changed torch.load's default to weights_only=True.
+        # These files are locally generated PyG HeteroData caches rather than
+        # model weights, so their storage classes must be unpickled. Only load
+        # processed files produced from a dataset source you trust.
+        self.data_dict = torch.load(
+            self.processed_paths[0], weights_only=False)
         # del self._data['node'].x
         if not reverse_mp:
             for split in ['train', 'val', 'test']:
                 del self.data_dict[split]['node', 'rev_to', 'node']
             # del self.slices['node', 'rev_to', 'node']
         if add_ports:
-            self.ports_dict = torch.load(self.processed_paths[1])
+            self.ports_dict = torch.load(
+                self.processed_paths[1], weights_only=False)
             for split in ['train', 'val', 'test']:
                 self.data_dict[split] = self.add_ports_func(self.data_dict[split], self.ports_dict[split])
 
