@@ -46,10 +46,11 @@ favour direct transaction attributes.
 
 ## Reproducible configurations
 
-Two resource-matched T4 configs are included:
+Three resource-matched T4 configs are included:
 
 | Config | Head | Loss | Purpose |
 |---|---|---|---|
+| `AML-Small-HI-FullMultiFraudGT-T4.yaml` | Original edge head | weighted CE | Baseline A |
 | `AML-Small-HI-MV-FraudGT-T4.yaml` | Multi-view | weighted CE | Head ablation |
 | `AML-Small-HI-MV-IA-FraudGT-T4.yaml` | Multi-view | focal | Proposed model |
 
@@ -79,9 +80,19 @@ python -m fraudGT.main \
   name_tag MV-IA-FraudGT
 ```
 
-For Kaggle/PyTorch 2.10, use
-`notebooks/kaggle/01_MV_IA_FraudGT_Kaggle.ipynb` after replacing its GitHub
-repository URL.
+For a fair one-seed Kaggle comparison, run these notebooks separately and in
+order:
+
+1. `notebooks/kaggle/02_A_FullMultiFraudGT_T4.ipynb` — original head +
+   weighted cross-entropy.
+2. `notebooks/kaggle/03_B_MV_FraudGT_T4.ipynb` — multi-view head + weighted
+   cross-entropy.
+3. `notebooks/kaggle/04_C_MV_IA_FraudGT_T4.ipynb` — multi-view head +
+   class-weighted focal loss.
+
+All three use seed 42 and the same T4 resource budget. Each notebook selects
+the epoch and threshold using validation F1 and then reports the matching test
+metrics.
 
 ## Evaluation protocol
 
