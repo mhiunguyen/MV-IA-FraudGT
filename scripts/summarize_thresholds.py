@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -24,7 +25,13 @@ def main():
     args = parser.parse_args()
 
     rows = []
-    seed_dirs = sorted(path for path in args.run_dir.iterdir() if path.is_dir())
+    # Ignore GraphGym's aggregate directory. Only numeric directories are
+    # individual runs (for example 42, 43 and 44).
+    seed_dirs = sorted(
+        (path for path in args.run_dir.iterdir()
+         if path.is_dir() and path.name.isdigit()),
+        key=lambda path: int(path.name),
+    )
     for seed_dir in seed_dirs:
         val_path = seed_dir / 'val' / 'stats.json'
         test_path = seed_dir / 'test' / 'stats.json'
@@ -49,8 +56,10 @@ def main():
         else:
             for record in val_records:
                 for key, value in record.items():
-                    if key.startswith('f1_t'):
-                        candidates.append((float(value), int(key[4:]), record))
+                    match = re.fullmatch(r'f1_t(\d+)', key)
+                    if match:
+                        candidates.append(
+                            (float(value), int(match.group(1)), record))
             if not candidates:
                 raise RuntimeError(
                     f'No threshold metrics found in {val_path}. For an old '
