@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Data, generated features, checkpoints and experiment output are not source.
+data/
+results/
+wandb/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Local editor and OS files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated summaries remain local unless deliberately added.
+summary_*.csv
+

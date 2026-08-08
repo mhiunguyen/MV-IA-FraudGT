@@ -1,0 +1,75 @@
+"""Choose threshold/epoch on validation logs and report matching test metrics."""
+
+import argparse
+import json
+from pathlib import Path
+
+import pandas as pd
+
+
+def read_json_lines(path):
+    with path.open(encoding='utf-8') as stream:
+        return [json.loads(line) for line in stream if line.strip()]
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('run_dir', type=Path,
+                        help='Directory containing one subdirectory per seed')
+    parser.add_argument('--output', type=Path, default=Path('summary_mvia.csv'))
+    args = parser.parse_args()
+
+    rows = []
+    seed_dirs = sorted(path for path in args.run_dir.iterdir() if path.is_dir())
+    for seed_dir in seed_dirs:
+        val_path = seed_dir / 'val' / 'stats.json'
+        test_path = seed_dir / 'test' / 'stats.json'
+        if not val_path.exists() or not test_path.exists():
+            continue
+
+        val_records = read_json_lines(val_path)
+        candidates = []
+        for record in val_records:
+            for key, value in record.items():
+                if key.startswith('f1_t'):
+                    candidates.append((float(value), int(key[4:]), record))
+        if not candidates:
+            raise RuntimeError(f'No threshold metrics found in {val_path}')
+
+        # Select both epoch and threshold using validation F1 only.
+        val_f1, threshold_percent, val_record = max(
+            candidates, key=lambda item: (item[0], item[1]))
+        epoch = val_record['epoch']
+        test_record = next(
+            (record for record in read_json_lines(test_path)
+             if record['epoch'] == epoch), None)
+        if test_record is None:
+            raise RuntimeError(f'No test record for epoch {epoch} in {test_path}')
+
+        suffix = f'{threshold_percent:02d}'
+        rows.append({
+            'seed': seed_dir.name,
+            'best_epoch': epoch,
+            'threshold': threshold_percent / 100,
+            'val_f1': val_f1,
+            'test_f1': test_record[f'f1_t{suffix}'],
+            'test_precision': test_record[f'precision_t{suffix}'],
+            'test_recall': test_record[f'recall_t{suffix}'],
+            'test_auc': test_record['auc'],
+            'test_accuracy_default_threshold': test_record['accuracy'],
+        })
+
+    if not rows:
+        raise RuntimeError(f'No completed seed directories found in {args.run_dir}')
+
+    frame = pd.DataFrame(rows)
+    frame.to_csv(args.output, index=False)
+    print(frame.to_string(index=False))
+    print('\nMean ± sample standard deviation')
+    for metric in ('test_f1', 'test_precision', 'test_recall', 'test_auc'):
+        print(f'{metric}: {frame[metric].mean():.4f} ± {frame[metric].std(ddof=1):.4f}')
+    print(f'\nCSV: {args.output.resolve()}')
+
+
+if __name__ == '__main__':
+    main()
