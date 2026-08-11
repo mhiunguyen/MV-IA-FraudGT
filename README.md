@@ -1,114 +1,115 @@
-# MV-IA-FraudGT
+# TH-FraudGT
 
-**Multi-View Imbalance-Aware Fraud Graph Transformer** is an experimental
-extension of [FraudGT](https://github.com/junhongmit/FraudGT) for highly
-imbalanced anti-money-laundering edge classification.
+**History-Augmented and Temporal Fraud Graph Transformer** is a research
+extension of [FraudGT](https://github.com/junhongmit/FraudGT) for financial
+fraud detection on directed transaction multigraphs.
 
-![MV-IA-FraudGT architecture](imgs/MV-IA-FraudGT-architecture.png)
+## Project status
 
-## What changed
+The project is evaluated as a controlled ablation study.  The original
+FraudGT encoder and edge-classification head are retained.
 
-The upstream FraudGT encoder is kept intact: neighbor sampling, reverse
-message passing, port numbering, Ego IDs, graph attention, edge message gate,
-edge attention bias, residual connections, and node/edge FFNs.
+| Variant | Historical edge features (H) | Temporal neighbor sampling (T) | Status |
+|---|---:|---:|---|
+| **A — FraudGT baseline** | No | No | Implemented and evaluated |
+| **H — H-FraudGT** | Yes | No | Implemented; seed 42 completed |
+| **T — T-FraudGT** | No | Yes | Planned; not implemented yet |
+| **TH — TH-FraudGT** | Yes | Yes | Planned after the T ablation |
 
-This repository adds three isolated components:
+The repository name describes the complete research direction.  Results must
+not label T or TH as completed until their code, leakage audit, and experiments
+are available.
 
-1. **Multi-view gated edge head**
-   (`fraudGT/head/multiview_hetero_edge.py`)
-   - Graph view: final source node, target node, and edge embeddings.
-   - Transaction view: a direct bypass of normalized input edge features.
-   - A learned per-transaction scalar gate fuses the two views.
-2. **Class-weighted focal loss**
-   (`fraudGT/loss/class_weighted_focal.py`)
-   - Uses configurable class weights and focal focusing parameter `gamma`.
-3. **Leakage-safe threshold selection**
-   (`fraudGT/evaluation/threshold_selection.py`)
-   - Selects the operating threshold on validation F1 only.
+## Implemented contribution: H-FraudGT
 
-See [NOTICE.md](NOTICE.md) for upstream attribution and redistribution notes.
+H-FraudGT augments each transaction edge with eight behavioral features built
+only from strictly earlier transactions:
 
-## Architecture
+1. time since the source account last sent money;
+2. time since the destination account last received money;
+3. whether the source has sent before;
+4. whether the destination has received before;
+5. prior outgoing transaction count;
+6. prior incoming transaction count;
+7. prior transaction count for the ordered account pair; and
+8. current amount relative to the source's historical outgoing mean.
 
-For transaction `(i, j)`:
+For an edge observed at time `t`, its history is restricted to:
 
 ```text
-z_graph = MLP([h_i^L || h_j^L || E_ij^L])
-z_transaction = MLP(E_ij_input)
-alpha = sigmoid(MLP([z_graph || z_transaction]))
-z_fusion = alpha * z_graph + (1 - alpha) * z_transaction
-prediction = Classifier(z_fusion)
+H(t) = { e_k | timestamp(e_k) < t }
+E_history = concat(E_original, eight past-only history features)
 ```
 
-The head stores the most recent gate values in `model.post_gt.last_gate` for
-diagnostics.  Values close to one favour graph context; values close to zero
-favour direct transaction attributes.
+Edges sharing the same timestamp cannot observe one another, and continuous
+history features are normalized with training-split statistics only.
 
-## Reproducible configurations
+Main implementation files:
 
-Three resource-matched T4 configs are included:
+- `fraudGT/datasets/history_features.py` — past-only feature construction;
+- `fraudGT/datasets/aml_dataset.py` — optional history integration and cache;
+- `fraudGT/config/dataset_config.py` — `dataset.add_history` switch;
+- `configs/AML-Small-HI/AML-Small-HI-History-T4.yaml` — H experiment;
+- `notebooks/kaggle/06_H_FraudGT_History_T4.ipynb` — seed 42;
+- `notebooks/kaggle/07_AH_Seeds43_44_T4x2.ipynb` — A/H seeds 43–44.
 
-| Config | Head | Loss | Purpose |
-|---|---|---|---|
-| `AML-Small-HI-FullMultiFraudGT-T4.yaml` | Original edge head | weighted CE | Baseline A |
-| `AML-Small-HI-MV-FraudGT-T4.yaml` | Multi-view | weighted CE | Head ablation |
-| `AML-Small-HI-MV-IA-FraudGT-T4.yaml` | Multi-view | focal | Proposed model |
+## Planned contribution: T-FraudGT
 
-Both use batch 256, fanout `[15, 15]`, 128 iterations/epoch, 50 epochs, and
-the full FraudGT encoder.  Compare them with the resource-matched upstream
-Multi-FraudGT baseline; do not compare these numbers directly with the paper's
-V100/500-epoch result.
+T will replace the ordinary link-neighbor sampler with a past-only temporal
+sampler.  For a target transaction at time `t`, only neighboring edges with
+timestamps earlier than `t` will be eligible.  A recency policy may then rank
+or sample those eligible edges.  The exact policy must be implemented and
+audited before reporting T or TH results.
 
-## Setup
+TH combines the two independent changes:
+
+```text
+TH-FraudGT = H historical edge features + T past-only temporal sampling
+```
+
+The intended final ablation is `A / H / T / TH`, which separates the effect of
+each component from their interaction.
+
+## Seed-42 result on AML-Small-HI
+
+At the fixed threshold 0.50, the current controlled one-seed experiment is:
+
+| Model | Validation F1 | Test F1 | Precision | Recall | ROC-AUC |
+|---|---:|---:|---:|---:|---:|
+| A | 0.61983 | 0.67442 | 0.66514 | 0.68396 | 0.98688 |
+| H | **0.66667** | **0.71642** | **0.69421** | **0.74009** | **0.99023** |
+
+This is preliminary evidence from one seed, not a final mean ± standard
+deviation result.  Seeds 43 and 44 must be completed for both A and H.
+
+## Reproducibility protocol
+
+1. Use the same AML-Small-HI chronological train/validation/test split.
+2. Match batch size, fanout, iterations, optimizer, encoder, head, and budget.
+3. Train independently with seeds 42, 43, and 44.
+4. Select the epoch with validation F1 only.
+5. Report fixed-threshold 0.50 as the primary protocol.
+6. Report a validation-selected threshold only as a secondary analysis.
+7. Apply the selected epoch and threshold to test once.
+8. Report mean ± standard deviation across seeds.
+
+After a multi-seed run:
 
 ```bash
-conda create -n mvia-fraudgt python=3.9 -y
-conda activate mvia-fraudgt
-conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
-conda install pyg -c pyg
-pip install -r requirements.txt
+python scripts/summarize_thresholds.py results/<experiment-directory> \
+  --fixed-threshold 0.50
 ```
 
-Place `HI-Small_Trans.csv` under the data directory expected by the config,
-then run:
+## Legacy exploratory experiments
 
-```bash
-python -m fraudGT.main \
-  --cfg configs/AML-Small-HI/AML-Small-HI-MV-IA-FraudGT-T4.yaml \
-  --repeat 1 \
-  --gpu 0 \
-  name_tag MV-IA-FraudGT
-```
+The earlier Multi-view and imbalance-aware heads remain in the repository as
+exploratory ablations.  They are not the primary proposed method after the
+project moved to the H/T direction.  Keeping them preserves experiment history
+and does not mean they are required for the final A/H/T/TH comparison.
 
-For a fair one-seed Kaggle comparison, run these notebooks separately and in
-order:
+## Upstream attribution
 
-1. `notebooks/kaggle/02_A_FullMultiFraudGT_T4.ipynb` — original head +
-   weighted cross-entropy.
-2. `notebooks/kaggle/03_B_MV_FraudGT_T4.ipynb` — multi-view head + weighted
-   cross-entropy.
-3. `notebooks/kaggle/04_C_MV_IA_FraudGT_T4.ipynb` — multi-view head +
-   class-weighted focal loss.
-
-All three use seed 42 and the same T4 resource budget. Each notebook selects
-the epoch and threshold using validation F1 and then reports the matching test
-metrics.
-
-## Evaluation protocol
-
-1. Train with seeds 42, 43, and 44.
-2. Select the best epoch using validation F1.
-3. Select the threshold using validation predictions only.
-4. Apply that fixed epoch and threshold to the test split.
-5. Report precision, recall, F1, ROC-AUC, time, and memory as mean +/- std.
-
-After a multi-seed run, summarize with:
-
-```bash
-python scripts/summarize_thresholds.py results/<experiment-directory>
-```
-
-## Status
-
-This is research prototype code.  Start with one-seed smoke tests before
-running the full three-seed experiment.
+This repository retains the official FraudGT framework, dataset loaders,
+baseline models, and configurations for reproducibility.  The repository is
+an extension, not a claim of authorship over the complete upstream codebase.
+See [NOTICE.md](NOTICE.md) for attribution and redistribution notes.
