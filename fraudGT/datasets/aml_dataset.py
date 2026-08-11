@@ -21,6 +21,11 @@ from torch_geometric.data import (
 from torch_geometric.utils import index_to_mask
 
 from .temporal_dataset import TemporalDataset
+from .history_features import (
+    HISTORY_FEATURE_NAMES,
+    compute_past_only_history_features_raw,
+    normalize_history_features_train_only,
+)
 
 def z_norm(data):
     std = data.std(0).unsqueeze(0)
@@ -138,11 +143,14 @@ class AMLDataset(TemporalDataset):
 
     def __init__(self, root: str, name: str, reverse_mp: bool = False,
                  add_ports: bool = False,
+                 add_history: bool = False,
                  transform: Optional[Callable] = None,
                  pre_transform: Optional[Callable] = None):
         self.name = name # Small-LI
         self.reverse_mp = reverse_mp
         self.add_ports = add_ports
+        self.add_history = add_history
+        self.history_feature_names = list(HISTORY_FEATURE_NAMES)
         assert self.name.split('-')[0] in self.dataset_sizes
         assert self.name.split('-')[1] in self.dataset_rates
         super().__init__(root, transform, pre_transform)
@@ -201,7 +209,8 @@ class AMLDataset(TemporalDataset):
 
     @property
     def processed_file_names(self) -> str:
-        return ['data.pt', 'ports.pt']
+        suffix = '_history' if self.add_history else ''
+        return [f'data{suffix}.pt', f'ports{suffix}.pt']
 
     # def download(self):
     #     url = self.urls[self.name]
@@ -311,6 +320,19 @@ class AMLDataset(TemporalDataset):
         e_val = torch.cat([train_inds, val_inds])
         e_test = torch.cat([train_inds, val_inds, test_inds])
 
+        history_features = None
+        if self.add_history:
+            print('Computing strictly past-only historical behavior features...')
+            history_raw = compute_past_only_history_features_raw(df_edges)
+            history_features, history_mean, history_std = \
+                normalize_history_features_train_only(
+                    history_raw, train_inds.cpu().numpy())
+            history_features = torch.from_numpy(history_features)
+            print(f'Historical features ({len(HISTORY_FEATURE_NAMES)}): '
+                  f'{list(HISTORY_FEATURE_NAMES)}')
+            print(f'History train means: {history_mean.tolist()}')
+            print(f'History train stds: {history_std.tolist()}')
+
         
         self.ports_dict = {}
         self.data_dict = {}
@@ -320,6 +342,9 @@ class AMLDataset(TemporalDataset):
 
             masked_edge_index = edge_index[:, e_mask]
             masked_edge_attr = z_norm(edge_attr[e_mask])
+            if history_features is not None:
+                masked_edge_attr = torch.cat(
+                    [masked_edge_attr, history_features[e_mask]], dim=1)
             masked_y = y[e_mask]
             masked_timestamps = timestamps[e_mask]
 

@@ -24,4 +24,8 @@ def dataset_cfg(cfg):
     cfg.dataset.reverse_mp = False
     cfg.dataset.add_ports = False
 
+    # Add leakage-safe historical behavior features to AML transaction edges.
+    # This option uses a separate processed cache from the original dataset.
+    cfg.dataset.add_history = False
+
     cfg.dataset.rand_split = False
