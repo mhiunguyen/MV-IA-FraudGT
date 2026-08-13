@@ -811,8 +811,20 @@ def _strict_temporal_cutoff(timestamps: Tensor) -> Tensor:
     return timestamps - 1
 
 
+def _to_integral_temporal_time(timestamps: Tensor) -> Tensor:
+    """Convert integral-valued timestamps to pyg-lib's required int64 type."""
+    if timestamps.is_floating_point():
+        rounded = timestamps.round()
+        if not torch.allclose(timestamps, rounded):
+            raise ValueError(
+                'Temporal sampling requires integral timestamps, but the '
+                'dataset contains fractional values.')
+        timestamps = rounded
+    return timestamps.to(dtype=torch.long)
+
+
 def _ensure_edge_timestamps(data: HeteroData, task):
-    """Validate/backfill edge timestamps required by heterogeneous sampling."""
+    """Create int64 edge timestamps required by heterogeneous pyg-lib."""
     if not hasattr(data[task], 'timestamps'):
         raise ValueError(
             f'Temporal sampler requires data[{task}].timestamps.')
@@ -820,13 +832,15 @@ def _ensure_edge_timestamps(data: HeteroData, task):
     forward_times = data[task].timestamps
     for edge_type in data.edge_types:
         store = data[edge_type]
-        if hasattr(store, 'timestamps'):
-            continue
-        if store.edge_index.shape[1] != forward_times.shape[0]:
+        source_times = store.timestamps \
+            if hasattr(store, 'timestamps') else forward_times
+        if store.edge_index.shape[1] != source_times.shape[0]:
             raise ValueError(
                 f'Cannot infer timestamps for relation {edge_type}: edge '
                 'counts do not match the task relation.')
-        store.timestamps = forward_times
+        # Do not overwrite the original feature. pyg-lib temporal kernels
+        # require torch.int64, while the upstream AML cache stores float32.
+        store.temporal_timestamps = _to_integral_temporal_time(source_times)
 
 
 def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
@@ -843,7 +857,7 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
             raise TypeError(
                 'temporal_link_neighbor currently expects HeteroData.')
         _ensure_edge_timestamps(data, task)
-        edge_label_time = data[task].timestamps[mask]
+        edge_label_time = data[task].temporal_timestamps[mask]
         if cfg.train.temporal_strict:
             edge_label_time = _strict_temporal_cutoff(edge_label_time)
 
@@ -855,7 +869,7 @@ def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
 
         temporal_kwargs = {
             'edge_label_time': edge_label_time,
-            'time_attr': 'timestamps',
+            'time_attr': 'temporal_timestamps',
             'temporal_strategy': strategy,
             # Temporal edge batches need separate neighborhoods so every seed
             # edge retains its own cutoff time.
