@@ -63,6 +63,12 @@ def extended_cfg(cfg):
     # AddEgoID option
     cfg.train.add_ego_id = False
 
+    # Temporal link-neighbor sampling options. These fields are only used by
+    # the custom ``temporal_link_neighbor`` sampler, so existing experiments
+    # keep their original behavior.
+    cfg.train.temporal_strategy = 'last'
+    cfg.train.temporal_strict = True
+
     # APPNP hyperparameter
     cfg.gnn.K = 10
     cfg.gnn.alpha = 0.1

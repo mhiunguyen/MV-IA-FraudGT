@@ -791,11 +791,77 @@ class AddEgoIdsForLinkNeighbor(BaseTransform):
 
 @register_sampler('link_neighbor')
 def get_LinkNeighborLoader(dataset, batch_size, shuffle=True, split='train'):
+    return _get_link_neighbor_loader(
+        dataset, batch_size, shuffle=shuffle, split=split, temporal=False)
+
+
+def _strict_temporal_cutoff(timestamps: Tensor) -> Tensor:
+    """Return the greatest representable cutoff strictly below each time.
+
+    PyG's temporal sampler accepts neighbors whose timestamp is less than or
+    equal to ``edge_label_time``. Moving each label time to its predecessor
+    converts that rule into ``neighbor_time < original_label_time`` and also
+    prevents same-timestamp leakage.
+    """
+    if timestamps.is_floating_point():
+        negative_infinity = torch.full_like(timestamps, -torch.inf)
+        return torch.nextafter(timestamps, negative_infinity)
+    if timestamps.dtype == torch.bool:
+        raise TypeError('Boolean timestamps are not supported.')
+    return timestamps - 1
+
+
+def _ensure_edge_timestamps(data: HeteroData, task):
+    """Validate/backfill edge timestamps required by heterogeneous sampling."""
+    if not hasattr(data[task], 'timestamps'):
+        raise ValueError(
+            f'Temporal sampler requires data[{task}].timestamps.')
+
+    forward_times = data[task].timestamps
+    for edge_type in data.edge_types:
+        store = data[edge_type]
+        if hasattr(store, 'timestamps'):
+            continue
+        if store.edge_index.shape[1] != forward_times.shape[0]:
+            raise ValueError(
+                f'Cannot infer timestamps for relation {edge_type}: edge '
+                'counts do not match the task relation.')
+        store.timestamps = forward_times
+
+
+def _get_link_neighbor_loader(dataset, batch_size, shuffle=True,
+                              split='train', temporal=False):
     task = cfg.dataset.task_entity
     data = dataset[split]
     mask = data[task].split_mask
     edge_label_index = data[task].edge_index[:, mask]
     edge_label = data[task].y[mask]
+
+    temporal_kwargs = {}
+    if temporal:
+        if not isinstance(data, HeteroData):
+            raise TypeError(
+                'temporal_link_neighbor currently expects HeteroData.')
+        _ensure_edge_timestamps(data, task)
+        edge_label_time = data[task].timestamps[mask]
+        if cfg.train.temporal_strict:
+            edge_label_time = _strict_temporal_cutoff(edge_label_time)
+
+        strategy = str(cfg.train.temporal_strategy).lower()
+        if strategy not in {'uniform', 'last'}:
+            raise ValueError(
+                "train.temporal_strategy must be 'uniform' or 'last', "
+                f'got {strategy!r}.')
+
+        temporal_kwargs = {
+            'edge_label_time': edge_label_time,
+            'time_attr': 'timestamps',
+            'temporal_strategy': strategy,
+            # Temporal edge batches need separate neighborhoods so every seed
+            # edge retains its own cutoff time.
+            'disjoint': True,
+        }
+
     loader_train = \
         LoaderWrapper( \
             LinkNeighborLoader(
@@ -807,10 +873,19 @@ def get_LinkNeighborLoader(dataset, batch_size, shuffle=True, split='train'):
                 batch_size=batch_size,
                 num_workers=cfg.num_workers,
                 shuffle=shuffle,
-                transform=AddEgoIdsForLinkNeighbor() if cfg.train.add_ego_id else None
+                transform=AddEgoIdsForLinkNeighbor() if cfg.train.add_ego_id else None,
+                **temporal_kwargs,
             ),
             getattr(cfg, 'val' if split == 'test' else split).iter_per_epoch,
             split
         )
 
     return loader_train
+
+
+@register_sampler('temporal_link_neighbor')
+def get_TemporalLinkNeighborLoader(dataset, batch_size, shuffle=True,
+                                   split='train'):
+    """Sample only the most recent strictly-past neighborhood per edge."""
+    return _get_link_neighbor_loader(
+        dataset, batch_size, shuffle=shuffle, split=split, temporal=True)

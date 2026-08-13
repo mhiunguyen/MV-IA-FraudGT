@@ -160,6 +160,15 @@ class AMLDataset(TemporalDataset):
         # processed files produced from a dataset source you trust.
         self.data_dict = torch.load(
             self.processed_paths[0], weights_only=False)
+        # Older processed caches predate temporal sampling and only store the
+        # timestamps on the forward relation. Reverse message passing keeps a
+        # one-to-one edge order, so the same timestamps are valid for rev_to.
+        # Backfill them here to avoid forcing an expensive AML reprocess.
+        for split in ['train', 'val', 'test']:
+            forward = self.data_dict[split]['node', 'to', 'node']
+            reverse = self.data_dict[split]['node', 'rev_to', 'node']
+            if hasattr(forward, 'timestamps') and not hasattr(reverse, 'timestamps'):
+                reverse.timestamps = forward.timestamps
         # del self._data['node'].x
         if not reverse_mp:
             for split in ['train', 'val', 'test']:
@@ -362,6 +371,7 @@ class AMLDataset(TemporalDataset):
 
             data['node', 'rev_to', 'node'].edge_index = masked_edge_index.flipud()
             data['node', 'rev_to', 'node'].edge_attr = masked_edge_attr
+            data['node', 'rev_to', 'node'].timestamps = masked_timestamps
 
             # Define the labels in the training/validation/test sets
             data['node', 'to', 'node'].split_mask = index_to_mask(inds, size=masked_edge_index.shape[1])
