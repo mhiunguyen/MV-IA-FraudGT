@@ -24,8 +24,13 @@ from .temporal_dataset import TemporalDataset
 from .history_features import (
     HISTORY_FEATURE_NAMES,
     compute_past_only_history_features_raw,
+    history_feature_names,
     normalize_history_features_train_only,
+    resolve_history_feature_indices,
 )
+
+
+AML_BASE_EDGE_FEATURE_COUNT = 4
 
 def z_norm(data):
     std = data.std(0).unsqueeze(0)
@@ -144,13 +149,17 @@ class AMLDataset(TemporalDataset):
     def __init__(self, root: str, name: str, reverse_mp: bool = False,
                  add_ports: bool = False,
                  add_history: bool = False,
+                 history_groups=None,
                  transform: Optional[Callable] = None,
                  pre_transform: Optional[Callable] = None):
         self.name = name # Small-LI
         self.reverse_mp = reverse_mp
         self.add_ports = add_ports
         self.add_history = add_history
-        self.history_feature_names = list(HISTORY_FEATURE_NAMES)
+        self.history_groups = history_groups
+        self.history_feature_indices = resolve_history_feature_indices(
+            history_groups)
+        self.history_feature_names = list(history_feature_names(history_groups))
         assert self.name.split('-')[0] in self.dataset_sizes
         assert self.name.split('-')[1] in self.dataset_rates
         super().__init__(root, transform, pre_transform)
@@ -160,6 +169,13 @@ class AMLDataset(TemporalDataset):
         # processed files produced from a dataset source you trust.
         self.data_dict = torch.load(
             self.processed_paths[0], weights_only=False)
+        # The canonical history cache always stores all eight features.  Each
+        # ablation projects that cache to its selected R/F/M columns in memory,
+        # avoiding three expensive AML preprocessing passes while ensuring
+        # that H-R, H-F, H-M and H-RFM cannot accidentally share the wrong
+        # edge-feature tensor.
+        if self.add_history:
+            self._select_history_feature_groups()
         # Older processed caches predate temporal sampling and only store the
         # timestamps on the forward relation. Reverse message passing keeps a
         # one-to-one edge order, so the same timestamps are valid for rev_to.
@@ -179,6 +195,32 @@ class AMLDataset(TemporalDataset):
                 self.processed_paths[1], weights_only=False)
             for split in ['train', 'val', 'test']:
                 self.data_dict[split] = self.add_ports_func(self.data_dict[split], self.ports_dict[split])
+
+    def _select_history_feature_groups(self):
+        expected_full_dim = AML_BASE_EDGE_FEATURE_COUNT + len(
+            HISTORY_FEATURE_NAMES)
+        keep_columns = list(range(AML_BASE_EDGE_FEATURE_COUNT)) + [
+            AML_BASE_EDGE_FEATURE_COUNT + column
+            for column in self.history_feature_indices
+        ]
+        for split in ['train', 'val', 'test']:
+            for edge_type in [
+                ('node', 'to', 'node'),
+                ('node', 'rev_to', 'node'),
+            ]:
+                edge_attr = self.data_dict[split][edge_type].edge_attr
+                if edge_attr.shape[1] != expected_full_dim:
+                    raise RuntimeError(
+                        'History cache has an unexpected edge-feature width: '
+                        f'{edge_attr.shape[1]} (expected {expected_full_dim}). '
+                        'Delete data_history.pt and let the dataset rebuild it.'
+                    )
+                self.data_dict[split][edge_type].edge_attr = edge_attr[
+                    :, keep_columns]
+        print(
+            f'Selected history groups {self.history_groups or ["all"]}: '
+            f'{self.history_feature_names}'
+        )
 
     def add_ports_func(self, data, ports):
         reverse_ports = True
@@ -271,6 +313,7 @@ class AMLDataset(TemporalDataset):
         print(f"Number of transactions = {df_edges.shape[0]}")
 
         edge_features = ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+        assert len(edge_features) == AML_BASE_EDGE_FEATURE_COUNT
         node_features = ['Feature']
 
         print(f'Edge features being used: {edge_features}')

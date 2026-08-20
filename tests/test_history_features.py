@@ -2,8 +2,11 @@ import numpy as np
 import pandas as pd
 
 from fraudGT.datasets.history_features import (
+    HISTORY_FEATURE_NAMES,
     compute_past_only_history_features_raw,
+    history_feature_names,
     normalize_history_features_train_only,
+    resolve_history_feature_indices,
 )
 
 
@@ -42,3 +45,23 @@ def test_normalization_uses_train_indices_only_and_preserves_flags():
     assert np.isfinite(normalized).all()
     np.testing.assert_array_equal(normalized[:, 2], raw[:, 2])
     np.testing.assert_array_equal(normalized[:, 3], raw[:, 3])
+
+
+def test_history_ablation_groups_use_canonical_non_overlapping_columns():
+    assert resolve_history_feature_indices(['recency']) == (0, 1, 2, 3)
+    assert resolve_history_feature_indices(['frequency']) == (4, 5, 6)
+    assert resolve_history_feature_indices(['monetary']) == (7,)
+    assert resolve_history_feature_indices(
+        ['monetary', 'recency', 'frequency']
+    ) == tuple(range(8))
+    assert history_feature_names(['frequency']) == HISTORY_FEATURE_NAMES[4:7]
+
+
+def test_unknown_or_ambiguous_history_groups_are_rejected():
+    for groups in (['unknown'], ['all', 'recency']):
+        try:
+            resolve_history_feature_indices(groups)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'Expected invalid history groups: {groups}')

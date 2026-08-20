@@ -815,7 +815,8 @@ def preformat_AML(dataset_dir, name):
     # transform = T.ToUndirected(merge=True)
     dataset = AMLDataset(root=dataset_dir, name=name, reverse_mp=cfg.dataset.reverse_mp,
                          add_ports=cfg.dataset.add_ports,
-                         add_history=cfg.dataset.add_history)
+                         add_history=cfg.dataset.add_history,
+                         history_groups=cfg.dataset.history_groups)
     return dataset
 
 

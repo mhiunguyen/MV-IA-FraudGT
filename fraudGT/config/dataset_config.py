@@ -28,4 +28,8 @@ def dataset_cfg(cfg):
     # This option uses a separate processed cache from the original dataset.
     cfg.dataset.add_history = False
 
+    # Select an ablation subset from recency, frequency, and monetary.  The
+    # default preserves the original H-FraudGT behavior with all 8 features.
+    cfg.dataset.history_groups = ['recency', 'frequency', 'monetary']
+
     cfg.dataset.rand_split = False

@@ -7,7 +7,7 @@ not allowed to observe one another.
 
 from __future__ import annotations
 
-from typing import Iterable, Tuple
+from typing import Iterable, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -24,8 +24,59 @@ HISTORY_FEATURE_NAMES = (
     "hist_log_amount_over_prior_out_mean",
 )
 
+# The ablation groups are defined once here so every experiment uses the
+# exact same column mapping.  Columns remain in the canonical eight-feature
+# order regardless of the order used in a YAML file.
+HISTORY_FEATURE_GROUPS = {
+    "recency": (0, 1, 2, 3),
+    "frequency": (4, 5, 6),
+    "monetary": (7,),
+}
+
 # Binary indicators stay in {0, 1}; the other columns are standardized.
 CONTINUOUS_HISTORY_COLUMNS = (0, 1, 4, 5, 6, 7)
+
+
+def resolve_history_feature_indices(
+    groups: Sequence[str] | str | None = None,
+) -> Tuple[int, ...]:
+    """Resolve R/F/M group names to canonical history-feature columns.
+
+    ``None``, an empty sequence, or ``"all"`` selects all eight features.
+    The function rejects unknown group names instead of silently running an
+    invalid ablation.
+    """
+    if groups is None:
+        return tuple(range(len(HISTORY_FEATURE_NAMES)))
+    if isinstance(groups, str):
+        groups = [part.strip() for part in groups.split(",") if part.strip()]
+    normalized = {str(group).strip().lower() for group in groups}
+    if not normalized or normalized == {"all"}:
+        return tuple(range(len(HISTORY_FEATURE_NAMES)))
+    if "all" in normalized:
+        raise ValueError("history group 'all' cannot be combined with other groups")
+    unknown = normalized.difference(HISTORY_FEATURE_GROUPS)
+    if unknown:
+        valid = ", ".join(HISTORY_FEATURE_GROUPS)
+        raise ValueError(
+            f"Unknown history feature groups: {sorted(unknown)}; valid: {valid}"
+        )
+    return tuple(
+        column
+        for group, columns in HISTORY_FEATURE_GROUPS.items()
+        if group in normalized
+        for column in columns
+    )
+
+
+def history_feature_names(
+    groups: Sequence[str] | str | None = None,
+) -> Tuple[str, ...]:
+    """Return selected feature names in their canonical column order."""
+    return tuple(
+        HISTORY_FEATURE_NAMES[column]
+        for column in resolve_history_feature_indices(groups)
+    )
 
 
 def _previous_distinct_timestamp(
