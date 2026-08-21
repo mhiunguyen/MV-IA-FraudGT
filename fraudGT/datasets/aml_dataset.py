@@ -23,6 +23,7 @@ from torch_geometric.utils import index_to_mask
 from .temporal_dataset import TemporalDataset
 from .history_features import (
     HISTORY_FEATURE_NAMES,
+    apply_history_reliability_gate,
     compute_past_only_history_features_raw,
     history_feature_names,
     normalize_history_features_train_only,
@@ -150,6 +151,8 @@ class AMLDataset(TemporalDataset):
                  add_ports: bool = False,
                  add_history: bool = False,
                  history_groups=None,
+                 history_reliability: bool = False,
+                 history_reliability_kappa: float = 5.0,
                  transform: Optional[Callable] = None,
                  pre_transform: Optional[Callable] = None):
         self.name = name # Small-LI
@@ -157,6 +160,11 @@ class AMLDataset(TemporalDataset):
         self.add_ports = add_ports
         self.add_history = add_history
         self.history_groups = history_groups
+        self.history_reliability = bool(history_reliability)
+        self.history_reliability_kappa = float(history_reliability_kappa)
+        if self.history_reliability and not self.add_history:
+            raise ValueError(
+                'history_reliability requires dataset.add_history=True')
         self.history_feature_indices = resolve_history_feature_indices(
             history_groups)
         self.history_feature_names = list(history_feature_names(history_groups))
@@ -261,6 +269,9 @@ class AMLDataset(TemporalDataset):
     @property
     def processed_file_names(self) -> str:
         suffix = '_history' if self.add_history else ''
+        if self.history_reliability:
+            kappa = format(self.history_reliability_kappa, 'g').replace('.', 'p')
+            suffix += f'_reliability_k{kappa}'
         return [f'data{suffix}.pt', f'ports{suffix}.pt']
 
     # def download(self):
@@ -379,6 +390,16 @@ class AMLDataset(TemporalDataset):
             history_features, history_mean, history_std = \
                 normalize_history_features_train_only(
                     history_raw, train_inds.cpu().numpy())
+            if self.history_reliability:
+                history_features = apply_history_reliability_gate(
+                    history_features,
+                    history_raw,
+                    self.history_reliability_kappa,
+                )
+                print(
+                    'Applied history reliability gate with '
+                    f'kappa={self.history_reliability_kappa:g}'
+                )
             history_features = torch.from_numpy(history_features)
             print(f'Historical features ({len(HISTORY_FEATURE_NAMES)}): '
                   f'{list(HISTORY_FEATURE_NAMES)}')

@@ -1,0 +1,12 @@
+# Packages installed on top of Kaggle's preinstalled PyTorch/CUDA runtime.
+# torch_sparse, torch_scatter and pyg_lib must be installed from the matching
+# https://data.pyg.org wheel index; see the final Kaggle notebook.
+torch_geometric
+torchmetrics
+yacs
+datatable
+pandas
+PyYAML
+ogb
+tensorboardX
+pytest

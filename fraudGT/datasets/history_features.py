@@ -36,6 +36,19 @@ HISTORY_FEATURE_GROUPS = {
 # Binary indicators stay in {0, 1}; the other columns are standardized.
 CONTINUOUS_HISTORY_COLUMNS = (0, 1, 4, 5, 6, 7)
 
+# Each continuous feature is shrunk by the amount of evidence available for
+# the entity/pair that produced it.  The count columns contain log1p(count) in
+# the raw feature matrix, so no additional pass over the transaction table is
+# needed.
+_RELIABILITY_COUNT_COLUMN = {
+    0: 4,  # outgoing recency <- prior outgoing count
+    1: 5,  # incoming recency <- prior incoming count
+    4: 4,  # outgoing frequency
+    5: 5,  # incoming frequency
+    6: 6,  # pair frequency
+    7: 4,  # amount ratio <- prior outgoing history
+}
+
 
 def resolve_history_feature_indices(
     groups: Sequence[str] | str | None = None,
@@ -212,3 +225,50 @@ def normalize_history_features_train_only(
     ) / stds[None, :]
     normalized = np.nan_to_num(normalized, nan=0.0, posinf=0.0, neginf=0.0)
     return normalized.astype(np.float32, copy=False), means, stds
+
+
+def apply_history_reliability_gate(
+    normalized_features: np.ndarray,
+    raw_features: np.ndarray,
+    kappa: float = 5.0,
+) -> np.ndarray:
+    """Shrink uncertain historical features towards their neutral value.
+
+    The reliability of a statistic backed by ``n`` prior observations is
+    ``q = n / (n + kappa)``.  The gate is applied after train-only
+    standardization, so zero is the neutral (training-mean) value.  Binary
+    ``has previous`` indicators are intentionally left unchanged.
+
+    Args:
+        normalized_features: The eight features after train-only scaling.
+        raw_features: The same eight features before scaling. Count columns
+            must still contain ``log1p(prior_count)``.
+        kappa: Positive shrinkage strength. Larger values require more past
+            observations before trusting a historical statistic.
+    """
+    if not np.isfinite(kappa) or float(kappa) <= 0:
+        raise ValueError(f"kappa must be finite and > 0, got {kappa}")
+
+    normalized = np.asarray(normalized_features, dtype=np.float32)
+    raw = np.asarray(raw_features, dtype=np.float32)
+    if normalized.ndim != 2 or normalized.shape[1] != len(HISTORY_FEATURE_NAMES):
+        raise ValueError(
+            f"Expected normalized feature shape [N, {len(HISTORY_FEATURE_NAMES)}], "
+            f"got {normalized.shape}"
+        )
+    expected_shape = (normalized.shape[0], len(HISTORY_FEATURE_NAMES))
+    if raw.shape != expected_shape:
+        raise ValueError(
+            f"raw_features must have shape {expected_shape}, got {raw.shape}"
+        )
+
+    gated = normalized.copy()
+    for feature_column, count_column in _RELIABILITY_COUNT_COLUMN.items():
+        prior_count = np.expm1(raw[:, count_column].astype(np.float64))
+        prior_count = np.maximum(prior_count, 0.0)
+        reliability = prior_count / (prior_count + float(kappa))
+        gated[:, feature_column] *= reliability.astype(np.float32)
+
+    return np.nan_to_num(
+        gated, nan=0.0, posinf=0.0, neginf=0.0
+    ).astype(np.float32, copy=False)

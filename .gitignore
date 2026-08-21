@@ -9,6 +9,8 @@ venv/
 # Data, generated features, checkpoints and experiment output are not source.
 data/
 results/
+results_final_history/
+generated_configs_final_history/
 wandb/
 runs/
 checkpoints/
@@ -24,4 +26,3 @@ Thumbs.db
 
 # Generated summaries remain local unless deliberately added.
 summary_*.csv
-

@@ -3,6 +3,7 @@ import pandas as pd
 
 from fraudGT.datasets.history_features import (
     HISTORY_FEATURE_NAMES,
+    apply_history_reliability_gate,
     compute_past_only_history_features_raw,
     history_feature_names,
     normalize_history_features_train_only,
@@ -65,3 +66,42 @@ def test_unknown_or_ambiguous_history_groups_are_rejected():
             pass
         else:
             raise AssertionError(f'Expected invalid history groups: {groups}')
+
+
+def test_reliability_gate_uses_prior_evidence_and_preserves_binary_flags():
+    raw = np.zeros((3, len(HISTORY_FEATURE_NAMES)), dtype=np.float32)
+    raw[:, 4] = np.log1p([0.0, 5.0, 1000.0])
+    raw[:, 5] = np.log1p([0.0, 5.0, 1000.0])
+    raw[:, 6] = np.log1p([0.0, 5.0, 1000.0])
+    normalized = np.ones_like(raw)
+    gated = apply_history_reliability_gate(normalized, raw, kappa=5.0)
+
+    # No history shrinks a continuous statistic to the neutral value.
+    assert gated[0, 0] == 0.0
+    # Five observations with kappa=5 have reliability 0.5.
+    assert np.isclose(gated[1, 0], 0.5, atol=1e-6)
+    assert np.isclose(gated[1, 6], 0.5, atol=1e-6)
+    # Abundant evidence approaches the original standardized feature.
+    assert gated[2, 7] > 0.99
+    # Binary availability indicators are not reliability-shrunk.
+    np.testing.assert_array_equal(gated[:, 2:4], normalized[:, 2:4])
+    # Input arrays are not modified in-place.
+    np.testing.assert_array_equal(normalized, np.ones_like(normalized))
+
+
+def test_reliability_gate_rejects_invalid_kappa_and_shapes():
+    valid = np.zeros((1, len(HISTORY_FEATURE_NAMES)), dtype=np.float32)
+    for kappa in (0.0, -1.0, np.inf):
+        try:
+            apply_history_reliability_gate(valid, valid, kappa=kappa)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'Expected invalid kappa: {kappa}')
+
+    try:
+        apply_history_reliability_gate(np.zeros(8), valid, kappa=5.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('Expected invalid normalized feature shape')

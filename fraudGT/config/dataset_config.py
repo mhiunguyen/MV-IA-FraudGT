@@ -32,4 +32,11 @@ def dataset_cfg(cfg):
     # default preserves the original H-FraudGT behavior with all 8 features.
     cfg.dataset.history_groups = ['recency', 'frequency', 'monetary']
 
+    # Optional reliability shrinkage for H-FraudGT. Continuous historical
+    # features are multiplied by n / (n + kappa), where n is the relevant
+    # strictly-prior transaction count. The original H-RFM remains unchanged
+    # when this switch is False.
+    cfg.dataset.history_reliability = False
+    cfg.dataset.history_reliability_kappa = 5.0
+
     cfg.dataset.rand_split = False

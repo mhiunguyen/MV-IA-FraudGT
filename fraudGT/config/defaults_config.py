@@ -35,6 +35,11 @@ def extended_cfg(cfg):
     # instead, when False, follow cfg.train.eval_period checkpointing frequency.
     cfg.train.ckpt_best = False
 
+    # When best-model checkpointing is enabled, optionally also keep a
+    # numeric recovery checkpoint every N epochs. Zero disables recovery
+    # checkpoints. The best model is always stored separately as best.ckpt.
+    cfg.train.ckpt_resume_period = 0
+
     # Enable tqdm progress bar during training/validation/testing
     cfg.train.tqdm = False
     cfg.val.tqdm = False

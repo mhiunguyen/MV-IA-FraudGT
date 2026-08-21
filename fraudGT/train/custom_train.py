@@ -8,7 +8,13 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.data import HeteroData, Data
 from torch_geometric.utils import mask_to_index, index_to_mask
-from fraudGT.graphgym.checkpoint import load_ckpt, save_ckpt, clean_ckpt
+from fraudGT.graphgym.checkpoint import (
+    clean_ckpt,
+    get_best_ckpt_metadata,
+    load_ckpt,
+    save_best_ckpt,
+    save_ckpt,
+)
 from fraudGT.graphgym.config import cfg
 from fraudGT.graphgym.loader import create_loader, get_loader
 from fraudGT.graphgym.loss import compute_loss
@@ -269,6 +275,14 @@ def custom_train(loggers, loaders, model, optimizer, scheduler):
     split_names = ['val', 'test']
     full_epoch_times = []
     perf = [[] for _ in range(num_splits)]
+    selection_metric = 'loss' if cfg.metric_best == 'auto' else cfg.metric_best
+    selection_agg = 'argmin' if cfg.metric_best == 'auto' else cfg.metric_agg
+    saved_best = get_best_ckpt_metadata() if cfg.train.enable_ckpt else {}
+    saved_best_value = (
+        saved_best.get('metric_value')
+        if saved_best.get('metric_name') == selection_metric
+        else None
+    )
     for cur_epoch in range(start_epoch, cfg.optim.max_epoch):
         start_time = time.perf_counter()
         # enable_runtime_stats()
@@ -296,55 +310,75 @@ def custom_train(loggers, loaders, model, optimizer, scheduler):
         if cfg.train.enable_ckpt and not cfg.train.ckpt_best \
                 and is_ckpt_epoch(cur_epoch):
             save_ckpt(model, optimizer, scheduler, cur_epoch)
+        elif cfg.train.enable_ckpt and cfg.train.ckpt_best \
+                and cfg.train.ckpt_resume_period > 0 \
+                and (((cur_epoch + 1) % cfg.train.ckpt_resume_period == 0)
+                     or (cur_epoch + 1 == cfg.optim.max_epoch)):
+            # Numeric checkpoints are recovery state. best.ckpt is managed
+            # independently below and is never removed by clean_ckpt().
+            save_ckpt(model, optimizer, scheduler, cur_epoch)
+            if cfg.train.ckpt_clean:
+                clean_ckpt()
 
         if cfg.wandb.use:
             run.log(flatten_dict(perf), step=cur_epoch)
 
         # Log current best stats on eval epoch.
         if is_eval_epoch(cur_epoch, start_epoch):
-            best_epoch = np.array([vp['loss'] for vp in val_perf]).argmin()
+            best_index = np.array([vp['loss'] for vp in val_perf]).argmin()
             best_train = best_val = best_test = ""
             if cfg.metric_best != 'auto':
                 # Select again based on val perf of `cfg.metric_best`.
                 m = cfg.metric_best
-                best_epoch = getattr(np.array([vp[m] for vp in val_perf]),
+                best_index = getattr(np.array([vp[m] for vp in val_perf]),
                                      cfg.metric_agg)()
-                if m in perf[0][best_epoch]:
-                    best_train = f"train_{m}: {perf[0][best_epoch][m]:.4f}"
+                if m in perf[0][best_index]:
+                    best_train = f"train_{m}: {perf[0][best_index][m]:.4f}"
                 else:
                     # Note: For some datasets it is too expensive to compute
                     # the main metric on the training set.
                     best_train = f"train_{m}: {0:.4f}"
-                best_val = f"val_{m}: {perf[1][best_epoch][m]:.4f}"
-                best_test = f"test_{m}: {perf[2][best_epoch][m]:.4f}"
+                best_val = f"val_{m}: {perf[1][best_index][m]:.4f}"
+                best_test = f"test_{m}: {perf[2][best_index][m]:.4f}"
 
                 if cfg.wandb.use:
-                    bstats = {"best/epoch": best_epoch}
+                    bstats = {"best/epoch": perf[1][best_index]['epoch']}
                     for i, s in enumerate(['train', 'val', 'test']):
-                        bstats[f"best/{s}_loss"] = perf[i][best_epoch]['loss']
-                        if m in perf[i][best_epoch]:
-                            bstats[f"best/{s}_{m}"] = perf[i][best_epoch][m]
+                        bstats[f"best/{s}_loss"] = perf[i][best_index]['loss']
+                        if m in perf[i][best_index]:
+                            bstats[f"best/{s}_{m}"] = perf[i][best_index][m]
                             run.summary[f"best_{s}_perf"] = \
-                                perf[i][best_epoch][m]
+                                perf[i][best_index][m]
                         for x in ['hits@1', 'hits@3', 'hits@10', 'mrr']:
-                            if x in perf[i][best_epoch]:
-                                bstats[f"best/{s}_{x}"] = perf[i][best_epoch][x]
+                            if x in perf[i][best_index]:
+                                bstats[f"best/{s}_{x}"] = perf[i][best_index][x]
                     run.log(bstats, step=cur_epoch)
                     run.summary["full_epoch_time_avg"] = np.mean(full_epoch_times)
                     run.summary["full_epoch_time_sum"] = np.sum(full_epoch_times)
             # Checkpoint the best epoch params (if enabled).
+            best_epoch = int(perf[1][best_index].get('epoch', cur_epoch))
+            missing_value = np.inf if selection_agg == 'argmin' else -np.inf
+            current_value = float(
+                perf[1][-1].get(selection_metric, missing_value))
+            if selection_agg == 'argmin':
+                improved = saved_best_value is None or current_value < saved_best_value
+            else:
+                improved = saved_best_value is None or current_value > saved_best_value
             if cfg.train.enable_ckpt and cfg.train.ckpt_best and \
-                    best_epoch == cur_epoch:
-                save_ckpt(model, optimizer, scheduler, cur_epoch)
-                if cfg.train.ckpt_clean:  # Delete old ckpt each time.
-                    clean_ckpt()
+                    best_epoch == cur_epoch and improved:
+                save_best_ckpt(
+                    model, optimizer, scheduler, cur_epoch,
+                    metric_name=selection_metric,
+                    metric_value=current_value,
+                )
+                saved_best_value = current_value
             logging.info(
                 f"> Epoch {cur_epoch}: took {full_epoch_times[-1]:.1f}s "
                 f"(avg {np.mean(full_epoch_times):.1f}s) | "
                 f"Best so far: epoch {best_epoch}\t"
-                f"train_loss: {perf[0][best_epoch]['loss']:.4f} {best_train}\t"
-                f"val_loss: {perf[1][best_epoch]['loss']:.4f} {best_val}\t"
-                f"test_loss: {perf[2][best_epoch]['loss']:.4f} {best_test}"
+                f"train_loss: {perf[0][best_index]['loss']:.4f} {best_train}\t"
+                f"val_loss: {perf[1][best_index]['loss']:.4f} {best_val}\t"
+                f"test_loss: {perf[2][best_index]['loss']:.4f} {best_test}"
             )
             if hasattr(model, 'trf_layers'):
                 # Log SAN's gamma parameter values if they are trainable.
