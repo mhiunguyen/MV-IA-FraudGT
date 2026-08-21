@@ -194,12 +194,16 @@ assert results['checkpoint_ok'].all()"""),
     code("""import matplotlib.pyplot as plt
 
 plot = results.set_index('model').loc[MODELS].reset_index()
-baseline = float(plot.loc[plot['model'] == 'A', 'test_f1'].iloc[0]) * 100
 fig, ax = plt.subplots(figsize=(10, 5.2))
-bars = ax.bar(plot['model'], plot['test_f1'] * 100,
-              color=['#777777'] + ['#356a9a'] * 7 + ['#222222'])
-ax.axhline(baseline, color='black', linewidth=1, linestyle='--',
-           label=f'FraudGT gốc: {baseline:.2f}%')
+colors = [
+    '#777777' if model == 'A' else '#222222' if model == 'HG' else '#356a9a'
+    for model in plot['model']
+]
+bars = ax.bar(plot['model'], plot['test_f1'] * 100, color=colors)
+if 'A' in set(plot['model']):
+    baseline = float(plot.loc[plot['model'] == 'A', 'test_f1'].iloc[0]) * 100
+    ax.axhline(baseline, color='black', linewidth=1, linestyle='--',
+               label=f'FraudGT gốc: {baseline:.2f}%')
 for bar, value in zip(bars, plot['test_f1'] * 100):
     ax.text(bar.get_x() + bar.get_width()/2, value + 0.6,
             f'{value:.2f}%', ha='center', va='bottom', fontsize=9)
@@ -207,7 +211,8 @@ ax.set_ylabel('F1 trên tập kiểm thử (%)')
 ax.set_xlabel('Cấu hình')
 ax.set_title('Ablation đặc trưng lịch sử và reliability gate — seed 43')
 ax.grid(axis='y', alpha=0.2)
-ax.legend()
+if 'A' in set(plot['model']):
+    ax.legend()
 fig.tight_layout()
 plot_path = EVIDENCE / 'final_history_f1_seed43.png'
 fig.savefig(plot_path, dpi=180, bbox_inches='tight')

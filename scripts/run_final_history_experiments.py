@@ -166,24 +166,46 @@ def run_phase(repo: Path, jobs: list[tuple[str, int]], poll_seconds: int) -> Non
 
 
 def deterministic_phases(models: list[str], gpus: list[int]):
-    requested = set(models)
+    requested = [model for model in MODEL_SPECS if model in set(models)]
     if len(gpus) == 1:
-        return [[(model, gpus[0])] for model in MODEL_SPECS if model in requested]
+        return [[(model, gpus[0])] for model in requested]
 
-    # H-RFM first creates the canonical eight-feature cache. All partial
-    # variants run afterwards. HG uses its own reliability-cache suffix.
-    template = [
-        [("A", gpus[0]), ("H-RFM", gpus[1])],
-        [("H-RF", gpus[0]), ("H-RM", gpus[1])],
-        [("H-FM", gpus[0]), ("H-R", gpus[1])],
-        [("H-F", gpus[0]), ("H-M", gpus[1])],
-        [("HG", gpus[0])],
+    # Exactly one ordinary history variant must create data_history.pt before
+    # the other R/F/M variants start. This avoids two processes writing the
+    # same canonical cache when users split the experiment across accounts.
+    ordinary_history = [
+        model for model in requested
+        if MODEL_SPECS[model]["add_history"]
+        and not MODEL_SPECS[model].get("reliability", False)
     ]
-    return [
-        [(model, gpu) for model, gpu in phase if model in requested]
-        for phase in template
-        if any(model in requested for model, _ in phase)
-    ]
+    initializer = None
+    if ordinary_history:
+        initializer = "H-RFM" if "H-RFM" in ordinary_history \
+            else ordinary_history[0]
+
+    first_phase_models = []
+    if initializer is not None:
+        first_phase_models.append(initializer)
+    # A and HG use different cache filenames, so either can safely run next
+    # to the canonical-history initializer.
+    for candidate in ("A", "HG"):
+        if candidate in requested and candidate not in first_phase_models:
+            first_phase_models.append(candidate)
+            break
+    if not first_phase_models and requested:
+        first_phase_models.append(requested[0])
+
+    remaining = [model for model in requested if model not in first_phase_models]
+    phases = [[
+        (model, gpus[index])
+        for index, model in enumerate(first_phase_models[:2])
+    ]]
+    for start in range(0, len(remaining), 2):
+        phases.append([
+            (model, gpus[index])
+            for index, model in enumerate(remaining[start:start + 2])
+        ])
+    return [phase for phase in phases if phase]
 
 
 def main() -> None:
