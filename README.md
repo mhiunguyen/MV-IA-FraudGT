@@ -28,6 +28,8 @@ Current Kaggle notebooks:
 - `notebooks/kaggle/06_H_FraudGT_History_T4.ipynb`
 - `notebooks/kaggle/07_AH_Seeds43_44_T4x2.ipynb`
 - `notebooks/kaggle/11_History_Final_Seed43_Checkpoints_T4x2.ipynb`
+- `notebooks/kaggle/11A_History_Final_Part1_Seed43_T4x2.ipynb`
+- `notebooks/kaggle/11B_History_Final_Part2_Seed43_T4x2.ipynb`
 
 The final notebook runs the complete R/F/M factorial ablation, saves
 validation-selected `best.ckpt` files, records the dataset/environment
